@@ -80,6 +80,8 @@ in
       };
 
       extraBin = {
+        # NixOS test-driver get_tty_text() shells out to awk while reading TTY2.
+        awk = "${pkgs.gawk}/bin/awk";
         lsblk = "${pkgs.util-linux}/bin/lsblk";
         blkid = "${pkgs.util-linux}/bin/blkid";
         tee = "${pkgs.coreutils}/bin/tee";
