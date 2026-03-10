@@ -602,12 +602,12 @@ nix run .#run-vm
 
 This will:
 
-1. Create a writable copy of the read-only disk image (e.g. `android-builder_25.11pre-git.raw`) in the current directory.
+1. Create a writable QCOW2 copy of the read-only disk image (for example `./android-builder_25.11pre-git.qcow2`) in the current directory.
 2. Sign the UKI with a pair of auto-generated test keys (stored in the nix store, so they persist across runs).
 3. Pre-configure artifact storage to use `/dev/vdb` (a second virtual disk is created automatically when `nixosAndroidBuilder.artifactStorage.enable` is set).
 4. Start a QEMU VM with Secure Boot, a TPM, and a graphical window.
 
-If the writable disk image already exists from a previous run, steps 1–3 are skipped and the existing image is reused. Delete the `.raw` file to force a fresh image.
+By default, the QCOW2 disk is removed when the VM exits so each `nix run .#run-vm` starts from a fresh writable disk. Use `nix run .#run-vm -- --keep-disk` to keep and reuse that state, or `nix run .#run-vm -- --disk-image /path/to/disk.qcow2` to choose a different disk path. You can also set `NIX_DISK_IMAGE=/path/to/disk.qcow2`.
 
 Use `systemctl poweroff` from within the VM, or close the QEMU window, to stop it.
 

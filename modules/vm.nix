@@ -6,9 +6,10 @@
 }:
 let
   cfg = config.virtualisation;
+  secureBootCfg = config.nixosAndroidBuilder.secureBoot;
+  credentialStorageCfg = config.nixosAndroidBuilder.credentialStorage;
   hostPkgs = cfg.host.pkgs;
 
-  secureBootScripts = hostPkgs.callPackage ../packages/secure-boot-scripts { };
   disk-installer = hostPkgs.callPackage ../packages/disk-installer { };
 in
 {
@@ -18,8 +19,8 @@ in
       memorySize = 64 * 1024;
       cores = 32;
 
-      useSecureBoot = true;
-      tpm.enable = true;
+      useSecureBoot = secureBootCfg.enable;
+      tpm.enable = secureBootCfg.enable || credentialStorageCfg.enable;
 
       # Don't use direct boot for the VM to verify that the bootloader is working.
       directBoot.enable = false;
@@ -45,58 +46,140 @@ in
       ];
     };
 
-    # Create a set of private keys for VM tests, but cache them in the /nix/store,
-    # so we don't need to create a new pair on each run.
-    system.build.secureBootKeysForTests = hostPkgs.runCommandLocal "test-keys" { } ''
-      ${lib.getExe secureBootScripts.create-signing-keys} $out/
-    '';
+    system.build =
+      lib.optionalAttrs secureBootCfg.enable {
+        # Create a set of private keys for VM tests, but cache them in the /nix/store,
+        # so we don't need to create a new pair on each run.
+        secureBootKeysForTests = hostPkgs.runCommandLocal "test-keys" { } ''
+          ${lib.getExe (hostPkgs.callPackage ../packages/secure-boot-scripts { }).create-signing-keys} $out/
+        '';
+      }
+      // {
 
-    # Helper that copies the read-only image out of the nix store, to a
-    # writable copy in $PWD. It then signs an UKI inside the images ESP and
-    # copies SecureBoot keys to it.
-    system.build.prepareWritableDisk = hostPkgs.writeShellApplication {
-      name = "prepare-writable-disk";
-      text =
-        let
-          cfg = config.virtualisation;
-        in
-        ''
-            if [ ! -e ${cfg.diskImage} ]; then
+        # Helper that copies the read-only image out of the nix store to a
+        # writable copy in $PWD, optionally signs the UKI for Secure Boot, and
+        # configures storage targets for VM tests.
+        prepareWritableDisk = hostPkgs.writeShellApplication {
+          name = "prepare-writable-disk";
+          text =
+            let
+              cfg = config.virtualisation;
+            in
+            ''
+              disk_image="''${NIX_PREPARE_DISK_IMAGE:-${cfg.diskImage}}"
 
-              echo >&2 "Copying ${config.system.build.finalImage}/${config.image.fileName} to ${cfg.diskImage}"
-              ${cfg.qemu.package}/bin/qemu-img convert \
-                -f raw -O raw \
-                "${config.system.build.finalImage}/${config.image.fileName}" \
-                "${cfg.diskImage}"
+              if [ ! -e "$disk_image" ]; then
 
-              echo >&2 "Resizing ${cfg.diskImage} to ${toString cfg.diskSize}M"
-              ${cfg.qemu.package}/bin/qemu-img resize \
-                "${cfg.diskImage}" \
-                "${toString cfg.diskSize}M"
+                echo >&2 "Copying ${config.system.build.finalImage}/${config.image.fileName} to $disk_image"
+                ${cfg.qemu.package}/bin/qemu-img convert \
+                  -f raw -O raw \
+                  "${config.system.build.finalImage}/${config.image.fileName}" \
+                  "$disk_image"
 
-              echo >&2 "Preparing ${cfg.diskImage}"
+                echo >&2 "Resizing $disk_image to ${toString cfg.diskSize}M"
+                ${cfg.qemu.package}/bin/qemu-img resize \
+                  -f raw \
+                  "$disk_image" \
+                  "${toString cfg.diskSize}M"
+
+                echo >&2 "Preparing $disk_image"
+            ''
+            + lib.optionalString secureBootCfg.enable ''
               ${lib.getExe disk-installer.configure} sign \
                 --keystore "${config.system.build.secureBootKeysForTests}" \
-                --device "${cfg.diskImage}"
+                --device "$disk_image"
+            ''
+            + ''
+                  ${lib.getExe disk-installer.configure} set-storage \
+                    --target "/dev/vdb" \
+                    --device "$disk_image"
 
-              ${lib.getExe disk-installer.configure} set-storage \
-                --target "/dev/vdb" \
-                --device "${cfg.diskImage}"
+                else
+                  echo "$disk_image already exists, skipping creation${lib.optionalString secureBootCfg.enable " and signing"}"
+              fi
+            '';
+        };
 
+        # Upstream system.build.vm wrapped to prepare a writable image before
+        # starting the VM, and sign it when Secure Boot is enabled.
+        vmWithWritableDisk = hostPkgs.writeShellApplication {
+          name = "run-${config.system.name}-vm";
+          runtimeInputs = [ hostPkgs.coreutils ];
+          text = ''
+            cleanup_disk=1
+            disk_image="''${NIX_DISK_IMAGE:-./${lib.removeSuffix ".raw" config.image.fileName}.qcow2}"
+            tmp_raw=""
+
+            while [ "$#" -gt 0 ]; do
+              case "$1" in
+                --keep-disk)
+                  cleanup_disk=0
+                  shift
+                  ;;
+                --disk-image)
+                  if [ "$#" -lt 2 ]; then
+                    echo "error: --disk-image requires a path argument" >&2
+                    exit 2
+                  fi
+                  disk_image="$2"
+                  shift 2
+                  ;;
+                --help|-h)
+                  cat <<EOF
+            Usage: nix run .#run-vm -- [OPTIONS] [-- VM_ARGS...]
+
+            Options:
+              --keep-disk        Keep disk image after VM exits
+              --disk-image PATH  Disk image path (default: ./${lib.removeSuffix ".raw" config.image.fileName}.qcow2)
+              --help, -h         Show this help text
+
+            Environment:
+              NIX_DISK_IMAGE     Override disk image path (default: ./${lib.removeSuffix ".raw" config.image.fileName}.qcow2)
+            EOF
+                  exit 0
+                  ;;
+                --)
+                  shift
+                  break
+                  ;;
+                *)
+                  break
+                  ;;
+              esac
+            done
+
+            disk_image="$(readlink -m "$disk_image")"
+            cleanup() {
+              status="$?"
+              if [ -n "$tmp_raw" ] && [ -e "$tmp_raw" ]; then
+                rm -f -- "$tmp_raw"
+              fi
+              if [ "$cleanup_disk" -eq 1 ] && [ -f "$disk_image" ]; then
+                rm -f -- "$disk_image"
+              fi
+              exit "$status"
+            }
+
+            trap cleanup EXIT INT TERM
+
+            export NIX_DISK_IMAGE="$disk_image"
+            if [ ! -e "$disk_image" ]; then
+              tmp_raw="$(mktemp -t ${config.system.name}-disk.XXXXXX.raw)"
+              rm -f -- "$tmp_raw"
+              export NIX_PREPARE_DISK_IMAGE="$tmp_raw"
+
+              echo "Preparing writable VM disk at $disk_image" >&2
+              ${lib.getExe config.system.build.prepareWritableDisk}
+
+              echo "Converting $tmp_raw to $disk_image" >&2
+              ${cfg.qemu.package}/bin/qemu-img convert -f raw -O qcow2 "$tmp_raw" "$disk_image"
             else
-              echo "${cfg.diskImage} already exists, skipping creation & signing"
-          fi
-        '';
-    };
+              echo "$disk_image already exists, reusing it" >&2
+            fi
 
-    # Upstreams system.build.vm wrapped to prepare a writeable & signed image
-    # before starting the vm.
-    system.build.vmWithWritableDisk = hostPkgs.writeShellApplication {
-      name = "run-${config.system.name}-vm";
-      text = ''
-        ${lib.getExe config.system.build.prepareWritableDisk}
-        ${lib.getExe config.system.build.vm} "$@"
-      '';
-    };
+            ${lib.getExe config.system.build.vm} "$@"
+          '';
+        };
+      };
   };
 }
