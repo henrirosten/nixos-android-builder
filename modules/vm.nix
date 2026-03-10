@@ -83,6 +83,9 @@ in
                   "${toString cfg.diskSize}M"
 
                 echo >&2 "Preparing $disk_image"
+                ${lib.getExe disk-installer.configure} append-cmdline \
+                  --device "$disk_image" \
+                  --params "systemd.show_status=true rd.systemd.show_status=true systemd.log_level=info console=tty0 console=ttyS0,115200 loglevel=7 panic=1 boot.panic_on_fail"
             ''
             + lib.optionalString secureBootCfg.enable ''
               ${lib.getExe disk-installer.configure} sign \
@@ -104,13 +107,19 @@ in
         # starting the VM, and sign it when Secure Boot is enabled.
         vmWithWritableDisk = hostPkgs.writeShellApplication {
           name = "run-${config.system.name}-vm";
-          runtimeInputs = [ hostPkgs.coreutils ];
+          runtimeInputs = [
+            hostPkgs.coreutils
+            hostPkgs.ansifilter
+          ];
           text = ''
             cleanup_disk=1
             disk_image="''${NIX_DISK_IMAGE:-./${lib.removeSuffix ".raw" config.image.fileName}.qcow2}"
             efi_vars="''${NIX_EFI_VARS:-./${config.system.name}-efi-vars.fd}"
             swtpm_dir="''${NIX_SWTPM_DIR:-./${config.system.name}-swtpm}"
+            console_log="''${RUN_VM_CONSOLE_LOG:-./run-vm.console.log}"
             tmp_raw=""
+            raw_console_log=""
+            console_filter_pid=""
 
             while [ "$#" -gt 0 ]; do
               case "$1" in
@@ -153,8 +162,18 @@ in
             disk_image="$(readlink -m "$disk_image")"
             efi_vars="$(readlink -m "$efi_vars")"
             swtpm_dir="$(readlink -m "$swtpm_dir")"
+            console_log="$(readlink -m "$console_log")"
+
             cleanup() {
               status="$?"
+              if [ -n "$console_filter_pid" ]; then
+                kill "$console_filter_pid" 2>/dev/null || true
+                wait "$console_filter_pid" 2>/dev/null || true
+              fi
+              if [ -n "$raw_console_log" ] && [ -f "$raw_console_log" ]; then
+                ansifilter --input="$raw_console_log" --output="$console_log"
+                rm -f -- "$raw_console_log"
+              fi
               if [ -n "$tmp_raw" ] && [ -e "$tmp_raw" ]; then
                 rm -f -- "$tmp_raw"
               fi
@@ -175,6 +194,7 @@ in
             export NIX_DISK_IMAGE="$disk_image"
             export NIX_EFI_VARS="$efi_vars"
             export NIX_SWTPM_DIR="$swtpm_dir"
+
             if [ ! -e "$disk_image" ]; then
               tmp_raw="$(mktemp -t ${config.system.name}-disk.XXXXXX.raw)"
               rm -f -- "$tmp_raw"
@@ -188,6 +208,17 @@ in
             else
               echo "$disk_image already exists, reusing it" >&2
             fi
+
+            mkdir -p "$(dirname "$console_log")"
+            raw_console_log="$(mktemp -t ${config.system.name}-console.XXXXXX.log)"
+            : > "$console_log"
+
+            (
+              tail -c +1 -f "$raw_console_log" | stdbuf -oL ansifilter >> "$console_log"
+            ) &
+            console_filter_pid="$!"
+
+            set -- -serial "file:$raw_console_log" "$@"
 
             ${lib.getExe config.system.build.vm} "$@"
           '';

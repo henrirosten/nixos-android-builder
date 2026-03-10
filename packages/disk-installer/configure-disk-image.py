@@ -3,6 +3,7 @@
 import sys
 import os
 import json
+import shlex
 import subprocess
 import tempfile
 import argparse
@@ -108,6 +109,55 @@ def verify_signature(efi_path, cert_path):
     return result.returncode == 0
 
 
+def dump_uki_section(uki_path, section_name, output_path, required=True):
+    """Extract a section from a UKI."""
+    result = subprocess.run(
+        ["objcopy", "--dump-section", f"{section_name}={output_path}", str(uki_path)],
+        check=False, capture_output=True
+    )
+    if result.returncode != 0:
+        if required:
+            raise InstallerError(f"Failed to read UKI section {section_name}")
+        return False
+
+    return True
+
+
+def rebuild_uki_with_cmdline(uki_path, cmdline_path, output_path):
+    """Rebuild a UKI with an updated kernel command line."""
+    ukify = os.environ.get("SYSTEMD_UKIFY")
+    efi_stub = os.environ.get("SYSTEMD_EFI_STUB")
+    if not ukify or not efi_stub:
+        raise InstallerError("SYSTEMD_UKIFY and SYSTEMD_EFI_STUB must be set")
+
+    with tempfile.TemporaryDirectory() as workdir:
+        workdir_path = Path(workdir)
+        linux_path = workdir_path / "linux"
+        initrd_path = workdir_path / "initrd"
+        osrel_path = workdir_path / "osrel"
+        uname_path = workdir_path / "uname"
+
+        dump_uki_section(uki_path, ".linux", linux_path)
+        dump_uki_section(uki_path, ".initrd", initrd_path)
+        dump_uki_section(uki_path, ".osrel", osrel_path)
+        dump_uki_section(uki_path, ".uname", uname_path)
+
+        ukify_cmd = [
+            ukify,
+            "build",
+            "--linux", str(linux_path),
+            "--initrd", str(initrd_path),
+            "--os-release", f"@{osrel_path}",
+            "--uname", uname_path.read_text(encoding="utf-8").rstrip("\x00"),
+            "--cmdline", f"@{cmdline_path}",
+            "--stub", efi_stub,
+            "--output", str(output_path),
+        ]
+
+        if subprocess.run(ukify_cmd, check=False).returncode != 0:
+            raise InstallerError("Failed to rebuild UKI")
+
+
 def extract_and_verify_uki(img_spec, cert_path, label):
     """Extract UKI from image and verify signature."""
     with tempfile.NamedTemporaryFile(suffix=".efi", delete=False) as temp_efi:
@@ -190,6 +240,68 @@ def sign_uki(device, img_spec, key_path, cert_path, label):
         print(f"✓ {label} UKI signed successfully")
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+def append_uki_cmdline(img_spec, extra_params, label):
+    """Append kernel command-line parameters to a UKI."""
+    if not verify_mtools_access(img_spec):
+        raise InstallerError(f"Cannot access {label.lower()} EFI partition (invalid FAT filesystem)")
+
+    with tempfile.NamedTemporaryFile(suffix=".efi", delete=False) as temp_efi:
+        uki_path = Path(temp_efi.name)
+
+    with tempfile.NamedTemporaryFile(suffix=".cmdline", delete=False) as temp_cmdline:
+        cmdline_path = Path(temp_cmdline.name)
+
+    with tempfile.NamedTemporaryFile(suffix=".efi", delete=False) as temp_updated_efi:
+        updated_uki_path = Path(temp_updated_efi.name)
+
+    try:
+        print(f"Extracting {label.lower()} UKI...")
+        if subprocess.run(
+            ["mcopy", "-n", "-i", img_spec, "::/EFI/BOOT/BOOTX64.EFI", str(uki_path)],
+            check=False, capture_output=True
+        ).returncode != 0:
+            raise InstallerError(f"Failed to extract {label.lower()} UKI")
+
+        if subprocess.run(
+            ["objcopy", f"--dump-section", f".cmdline={cmdline_path}", str(uki_path)],
+            check=False, capture_output=True
+        ).returncode != 0:
+            raise InstallerError(f"Failed to read {label.lower()} UKI cmdline")
+
+        current_cmdline = cmdline_path.read_text(encoding="utf-8").rstrip("\x00")
+        current_args = shlex.split(current_cmdline)
+        extra_args = shlex.split(extra_params)
+        new_args = current_args.copy()
+
+        for arg in extra_args:
+            if arg not in new_args:
+                new_args.append(arg)
+
+        new_cmdline = " ".join(new_args)
+
+        if new_cmdline == current_cmdline:
+            print(f"✓ {label} UKI cmdline already contains requested parameters")
+            return
+
+        cmdline_path.write_text(new_cmdline, encoding="utf-8")
+
+        print(f"Rebuilding {label.lower()} UKI with updated cmdline...")
+        rebuild_uki_with_cmdline(uki_path, cmdline_path, updated_uki_path)
+
+        print(f"Writing updated {label.lower()} UKI back...")
+        if subprocess.run(
+            ["mcopy", "-n", "-o", "-i", img_spec, str(updated_uki_path), "::/EFI/BOOT/BOOTX64.EFI"],
+            check=False, capture_output=True
+        ).returncode != 0:
+            raise InstallerError(f"Failed to write updated {label.lower()} UKI")
+
+        print(f"✓ {label} UKI cmdline updated")
+    finally:
+        uki_path.unlink(missing_ok=True)
+        cmdline_path.unlink(missing_ok=True)
+        updated_uki_path.unlink(missing_ok=True)
 
 
 def show_install_target(img_spec):
@@ -359,6 +471,34 @@ def cmd_set_target(args):
         temp_path.unlink(missing_ok=True)
 
 
+def cmd_append_cmdline(args):
+    """Append kernel command-line parameters to UKIs in the image."""
+    device = Path(args.device)
+    if not device.exists():
+        raise InstallerError(f"Device or image file not found: {device}")
+
+    payload_only = is_payload_only(device)
+    update_installer = (not payload_only) and (args.installer or (not args.payload and not args.installer))
+    update_payload = args.payload or (not args.payload and not args.installer)
+
+    if payload_only:
+        if update_installer:
+            raise InstallerError("Cannot update installer UKI: this is a payload-only image (no installer present)")
+
+        if update_payload:
+            payload_offset = get_partition_offset(device, UUID_EFI_SYSTEM)
+            append_uki_cmdline(f"{device}@@{payload_offset}", args.params, "Payload")
+
+    else:
+        if update_installer:
+            installer_offset = get_partition_offset(device, UUID_EFI_SYSTEM)
+            append_uki_cmdline(f"{device}@@{installer_offset}", args.params, "Installer")
+
+        if update_payload:
+            payload_offset = get_payload_esp_offset(device)
+            append_uki_cmdline(f"{device}@@{payload_offset}", args.params, "Payload")
+
+
 def cmd_set_storage(args):
     """Configure target for artifact storage."""
     device = Path(args.device)
@@ -427,6 +567,7 @@ Examples:
     %(prog)s sign --device installer.raw --payload --no-auto-enroll
     %(prog)s set-target --device installer.raw --target select
     %(prog)s set-storage --device installer.raw --target /dev/vdc
+    %(prog)s append-cmdline --device installer.raw --params "console=ttyS0,115200"
         """
     )
 
@@ -444,6 +585,12 @@ Examples:
     sign_parser.add_argument('--auto-enroll', action=argparse.BooleanOptionalAction, default=True,
                            help='Copy keystore files (PK.auth, KEK.auth, db.auth) to ESP for auto-enrollment (default: enabled)')
 
+    cmdline_parser = subparsers.add_parser('append-cmdline', help='Append kernel command-line parameters to UKIs')
+    cmdline_parser.add_argument('--device', required=True, help='Block device or disk image file')
+    cmdline_parser.add_argument('--params', required=True, help='Parameters to append if missing')
+    cmdline_parser.add_argument('--installer', action='store_true', help='Update only installer UKI')
+    cmdline_parser.add_argument('--payload', action='store_true', help='Update only payload UKI')
+
 
     target_parser = subparsers.add_parser('set-target', help='Configure installation target')
     target_parser.add_argument('--target', required=True, help='Target device (e.g., /dev/sda) or "select" for interactive')
@@ -457,7 +604,13 @@ Examples:
     args = parser.parse_args()
 
     try:
-        {'status': cmd_status, 'sign': cmd_sign, 'set-target': cmd_set_target, 'set-storage': cmd_set_storage}[args.command](args)
+        {
+            'status': cmd_status,
+            'sign': cmd_sign,
+            'append-cmdline': cmd_append_cmdline,
+            'set-target': cmd_set_target,
+            'set-storage': cmd_set_storage,
+        }[args.command](args)
     except InstallerError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

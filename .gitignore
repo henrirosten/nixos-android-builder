@@ -4,6 +4,7 @@ android-builder-efi-vars.fd
 android-builder-swtpm/
 *-efi-vars.fd
 *-swtpm/
+*.log
 *.raw
 .direnv/
 result

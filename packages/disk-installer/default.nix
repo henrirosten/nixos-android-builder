@@ -1,12 +1,16 @@
 {
   lib,
+  stdenv,
   writers,
   writeShellApplication,
   jq,
   mtools,
   util-linux,
   sbsigntool,
+  binutils,
   parted,
+  systemd,
+  systemdUkify,
 }:
 {
 
@@ -23,8 +27,11 @@
           util-linux
           mtools
           sbsigntool
+          binutils
         ]
       }"
+      "--set SYSTEMD_UKIFY ${systemdUkify}/lib/systemd/ukify"
+      "--set SYSTEMD_EFI_STUB ${systemd}/lib/systemd/boot/efi/linux${stdenv.hostPlatform.efiArch}.efi.stub"
     ];
   } ./configure-disk-image.py;
 

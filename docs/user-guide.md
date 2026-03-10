@@ -603,11 +603,14 @@ nix run .#run-vm
 This will:
 
 1. Create a writable QCOW2 copy of the read-only disk image (for example `./android-builder_25.11pre-git.qcow2`) in the current directory.
-2. Sign the UKI with a pair of auto-generated test keys (stored in the nix store, so they persist across runs).
-3. Pre-configure artifact storage to use `/dev/vdb` (a second virtual disk is created automatically when `nixosAndroidBuilder.artifactStorage.enable` is set).
-4. Start a QEMU VM with Secure Boot, a TPM, and a graphical window.
+2. Rebuild the image UKI so the guest serial console is enabled and written to a host log file during boot.
+3. If `nixosAndroidBuilder.secureBoot.enable = true;`, sign the UKI with a pair of auto-generated test keys (stored in the nix store, so they persist across runs).
+4. Pre-configure artifact storage to use `/dev/vdb` (a second virtual disk is created automatically when `nixosAndroidBuilder.artifactStorage.enable` is set).
+5. Start a QEMU VM with UEFI firmware, a graphical window, and a TPM when enabled by the VM configuration.
 
 By default, the QCOW2 disk, EFI variable store, and software TPM state are removed when the VM exits so each `nix run .#run-vm` starts from a fresh writable disk and firmware/TPM state. Use `nix run .#run-vm -- --keep-disk` to keep and reuse that state, or `nix run .#run-vm -- --disk-image /path/to/disk.qcow2` to choose a different disk path. You can also set `NIX_DISK_IMAGE=/path/to/disk.qcow2`.
+
+The guest serial console is also written to `./run-vm.console.log` on the host by default. The log is updated while the VM boots and sanitized so it can be viewed with tools like `cat` or `tail -f` without replaying terminal control sequences. Set `RUN_VM_CONSOLE_LOG=/path/to/run-vm.console.log` to choose a different host log path. Implementation details are documented in [vm-logging.md](vm-logging.md).
 
 Use `systemctl poweroff` from within the VM, or close the QEMU window, to stop it.
 
