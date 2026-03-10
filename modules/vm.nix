@@ -108,6 +108,8 @@ in
           text = ''
             cleanup_disk=1
             disk_image="''${NIX_DISK_IMAGE:-./${lib.removeSuffix ".raw" config.image.fileName}.qcow2}"
+            efi_vars="''${NIX_EFI_VARS:-./${config.system.name}-efi-vars.fd}"
+            swtpm_dir="''${NIX_SWTPM_DIR:-./${config.system.name}-swtpm}"
             tmp_raw=""
 
             while [ "$#" -gt 0 ]; do
@@ -149,6 +151,8 @@ in
             done
 
             disk_image="$(readlink -m "$disk_image")"
+            efi_vars="$(readlink -m "$efi_vars")"
+            swtpm_dir="$(readlink -m "$swtpm_dir")"
             cleanup() {
               status="$?"
               if [ -n "$tmp_raw" ] && [ -e "$tmp_raw" ]; then
@@ -157,12 +161,20 @@ in
               if [ "$cleanup_disk" -eq 1 ] && [ -f "$disk_image" ]; then
                 rm -f -- "$disk_image"
               fi
+              if [ "$cleanup_disk" -eq 1 ] && [ -f "$efi_vars" ]; then
+                rm -f -- "$efi_vars"
+              fi
+              if [ "$cleanup_disk" -eq 1 ] && [ -d "$swtpm_dir" ]; then
+                rm -rf -- "$swtpm_dir"
+              fi
               exit "$status"
             }
 
             trap cleanup EXIT INT TERM
 
             export NIX_DISK_IMAGE="$disk_image"
+            export NIX_EFI_VARS="$efi_vars"
+            export NIX_SWTPM_DIR="$swtpm_dir"
             if [ ! -e "$disk_image" ]; then
               tmp_raw="$(mktemp -t ${config.system.name}-disk.XXXXXX.raw)"
               rm -f -- "$tmp_raw"

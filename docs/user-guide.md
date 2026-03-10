@@ -607,7 +607,7 @@ This will:
 3. Pre-configure artifact storage to use `/dev/vdb` (a second virtual disk is created automatically when `nixosAndroidBuilder.artifactStorage.enable` is set).
 4. Start a QEMU VM with Secure Boot, a TPM, and a graphical window.
 
-By default, the QCOW2 disk is removed when the VM exits so each `nix run .#run-vm` starts from a fresh writable disk. Use `nix run .#run-vm -- --keep-disk` to keep and reuse that state, or `nix run .#run-vm -- --disk-image /path/to/disk.qcow2` to choose a different disk path. You can also set `NIX_DISK_IMAGE=/path/to/disk.qcow2`.
+By default, the QCOW2 disk, EFI variable store, and software TPM state are removed when the VM exits so each `nix run .#run-vm` starts from a fresh writable disk and firmware/TPM state. Use `nix run .#run-vm -- --keep-disk` to keep and reuse that state, or `nix run .#run-vm -- --disk-image /path/to/disk.qcow2` to choose a different disk path. You can also set `NIX_DISK_IMAGE=/path/to/disk.qcow2`.
 
 Use `systemctl poweroff` from within the VM, or close the QEMU window, to stop it.
 

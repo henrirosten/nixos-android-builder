@@ -1,6 +1,9 @@
 android-builder.qcow2
 android-builder-efi-vars.fd
 *.qcow2
+android-builder-swtpm/
+*-efi-vars.fd
+*-swtpm/
 *.raw
 .direnv/
 result
