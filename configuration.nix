@@ -3,17 +3,17 @@
   system.name = "android-builder";
 
   nixosAndroidBuilder = {
-    debug = false;
-    secureBoot.enable = true;
+    debug = true;
+    secureBoot.enable = false;
 
     artifactStorage = {
-      enable = true;
+      enable = false;
       contents = [
         "target/product/*"
         "source_measurement.txt"
       ];
     };
-    credentialStorage.enable = true;
+    credentialStorage.enable = false;
 
     # To get a public key, attach your yubikey and run the following command on the host:
     # pamu2fcfg --pin-verification -i "pam://nixos-android-builder" -o "pam://nixos-android-builder" -u "user"
@@ -23,7 +23,7 @@
     yubikeys.groupB = [
     ];
 
-    unattended.enable = true;
+    unattended.enable = false;
 
     build = {
       branches = [
