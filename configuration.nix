@@ -4,6 +4,7 @@
 
   nixosAndroidBuilder = {
     debug = false;
+    secureBoot.enable = true;
 
     artifactStorage = {
       enable = true;

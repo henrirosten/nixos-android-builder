@@ -36,6 +36,8 @@
 
     # Opt-in into systemd-based initrd, declarative user management and networking.
     boot.initrd.systemd.enable = true;
+    # The image always boots via EFI and several initrd services mount the ESP.
+    boot.initrd.supportedFilesystems.vfat = true;
     services.userborn.enable = true;
     networking.useNetworkd = true;
 

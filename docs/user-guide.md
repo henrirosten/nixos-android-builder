@@ -21,7 +21,7 @@ A more detailed architecture and technical description is available in [docs.pdf
   * A **target machine** on which to build Android on. It needs:
     - ~64G of memory
     - ~250G of free disk space
-    - EFI boot with secure boot in setup mode
+    - EFI boot (`secure boot` is optional; only required when `nixosAndroidBuilder.secureBoot.enable = true;`)
 
   * A **git checkout** of this repository, containing nix expressions and helper scripts to build the image.
     Commands in this document assume to be run from the repository’s top-level directory, unless explicitly stated otherwise.
@@ -31,6 +31,8 @@ A more detailed architecture and technical description is available in [docs.pdf
 #  Preparations on your local machine
 
 ## Create Secure Boot Keys
+
+*Skip this section if you explicitly set `nixosAndroidBuilder.secureBoot.enable = false;`.*
 
 We ship a small helper script, `create-signing-keys`, in our repo that generates a key pair to sign our Unified Kernel Image (`UKI`) with for secure boot.
 The script is intended to be run from the repository’s top-level directory and will write keys, certificates, etc. to a `keys/` directory relative to you current working directory.
@@ -114,8 +116,9 @@ android-builder> removed 'android-builder_25.11pre-git.raw'
 
 When `nix` finishes building the image, it creates a symlink - `result` - that points to a `/nix/store` path containing a raw disk image.
 
-That image already contains a full partition table and our NixOS closure including all tools to build Android. It’s almost ready to boot,
-but not yet signed for secure boot. We are going to fix that in the next step!
+That image already contains a full partition table and our NixOS closure including all tools to build Android.
+With the default `nixosAndroidBuilder.secureBoot.enable = true;`, continue with the next step to sign it for Secure Boot.
+If you explicitly set `nixosAndroidBuilder.secureBoot.enable = false;`, the image is ready to flash as-is.
 
 We can see the full path as well as the size of the generated disk image by running i.e.:
 
@@ -130,6 +133,8 @@ $ du --human-readable --apparent-size "$(realpath result/*.raw)"
 (Your disk image’s size may be slightly different than this example)
 
 ## Sign the Image
+
+*Skip this section if you explicitly set `nixosAndroidBuilder.secureBoot.enable = false;`.*
 
 With our disk image built, we still need to sign it for secure boot, as it still contains an unsigned `UKI` on its EFI System Partition (`ESP`).
 
@@ -159,7 +164,7 @@ After this step, `android-builder_25.11pre-git.raw` in the repository’s top-le
 
 ## Flash the Image
 
-With our image both built and signed, we are now ready to flash it to a block device, such as a USB stick or external hard drive.
+With our image built, and signed if secure boot is enabled, we are now ready to flash it to a block device, such as a USB stick or external hard drive.
 
 Attach the block device to your local machine and make sure you find its *device path*, e.g. via `lsblk`. We will use `/dev/sdX` as the block
 device, `android-builder_25.11pre-git.raw` as our image name in this example. While any tool to write a disk image to a block device could do
@@ -178,7 +183,7 @@ Replace `/dev/sdX` with the path to your removable device (e.g. `/dev/disk/by-id
 
 After the `sync` is finished, you can safely move the USB stick or external hard drive to your target machine.
 
-Be sure to enable secure boot setup mode before booting the target machine from the block device for the first time.
+If `nixosAndroidBuilder.secureBoot.enable = true;`, be sure to enable secure boot setup mode before booting the target machine from the block device for the first time.
 This is needed to automatically enroll our keys on first boot of the machine.
 
 The enrolled keys stay valid until either the target machines firmware is reset or the keys are rotated.

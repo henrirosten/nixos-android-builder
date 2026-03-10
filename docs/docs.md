@@ -88,7 +88,7 @@ key is generated just before `systemd-repart` in our custom `generate-disk-key.s
 | **20‑store**        | `store`        | `erofs`          | `/usr`     |
 | **30‑var‑lib-build**      | `var-lib-build`      | `ext4`           | `/var/lib/build` |
 
-- **boot** – Holds the signed Unified Kernel Image (`UKI`) as an `EFI` application, as well as Secure Boot update bundles for enrollment. The partition itself is unsigned and mounted read‑only during boot.
+- **boot** – Holds the Unified Kernel Image (`UKI`) as an `EFI` application. When `nixosAndroidBuilder.secureBoot.enable = true;`, it also holds Secure Boot update bundles for enrollment and a signed `UKI`. The partition itself is unsigned and mounted read‑only during boot.
 - **store-verity** – Stores the `dm‑verity` hash for the `/usr` partition. The hash is passed as `usrhash` in the kernel command line, which is signed as part of the `UKI`.
 - **store** – Contains the read-only Nix store,  bind‑mounted into `/nix/store` in the running system. The integrity of `/usr` is verified at runtime using `dm‑verity`.
 - **var-lib-build** – A minimal, ephemeral state partition. See next section below.
@@ -102,7 +102,7 @@ The `/var/lib/build` partition is deliberately designed to be temporary and encr
 
 ### Secure Boot Support
 
-Secure Boot is enabled by generating a set of keys that are stored unencrypted in a local `keys/` directory within the repository. Users must protect these keys and back them up. When a new image is signed, Secure Boot update bundles (`*.auth` files) are created for each target machine. These bundles are stored unsigned and unencrypted on the `/boot` partition. On boot, we check whether whe are in Secure Boot setup mode and, if so, enroll our keys. If Secure Boot is disabled, we display an error and fail early during boot.
+Secure Boot can be disabled via `nixosAndroidBuilder.secureBoot.enable = false;`. By default, the image is built for Secure Boot and expects a set of keys that are stored unencrypted in a local `keys/` directory within the repository. Users must protect these keys and back them up. When a new image is signed, Secure Boot update bundles (`*.auth` files) are created for each target machine. These bundles are stored unsigned and unencrypted on the `/boot` partition. When Secure Boot support is enabled in the image, early boot checks whether the firmware is in Secure Boot setup mode and, if so, enrolls our keys. If Secure Boot support is enabled but firmware Secure Boot is disabled, the system displays an error and fails early during boot.
 
 ## Custom FHS Environment {#fhsenv}
 
@@ -251,7 +251,7 @@ flowchart TB
     end
 
     signing-script --> signed
-    signed["<b>(8)</b> Image is signed & ready to boot"]
+    signed["<b>(8)</b> Image is signed & ready for Secure Boot"]
 
 ~~~
 
@@ -277,14 +277,14 @@ Main components are:
   - The unsigned `UKI` from step **(4)** is copied into the `esp` partition.
   - With that being done, the image is built and contains our entire NixOS closure, including the `fhsenv`, in a `dm-verity`-checked store partition, as well as the `UKI` including `usrhash`.
 
-All that's left to do, is to sign it and prepare it for Secure Boot.
-The `UKI` is not yet signed, as doing so inside the nix sandbox, might expose the signing keys.
-So the user is asked to copy the built image from the nix store to a writable location and execute `configure-disk-image sign` on it.
-Usage is documented in [user-guide.pdf](user-guide.pdf). `configure-disk-image` manipulates the `vfat` partition inside the disk image directly, in order to:
+If Secure Boot is enabled, all that's left to do is sign the image and prepare it for Secure Boot.
+The `UKI` is not yet signed, as doing so inside the nix sandbox might expose the signing keys.
+So when `nixosAndroidBuilder.secureBoot.enable = true;`, the user is asked to copy the built image from the nix store to a writable location and execute `configure-disk-image sign` on it.
+Usage is documented in [user-guide.pdf](user-guide.pdf). In that case, `configure-disk-image` manipulates the `vfat` partition inside the disk image directly, in order to:
 
 - **(6)** The `UKI` is copied to a temporary file, signed, and copied back into the `esp` again.
 - **(7)** Secure Boot update bundles (`*.auth` files) are copied to the `esp` to ensure that `ensure-secure-boot-enrollment.service` can find them during boot.
-- **(8)** We finally have a signed image, ready to flash & boot on a target machine.
+- **(8)** We finally have a signed image, ready to flash & boot on a target machine with Secure Boot enabled.
 
 
 \pagebreak
@@ -303,7 +303,7 @@ flowchart TB
     kernel["Kernel"]
     systemd-initrd["systemd"]
 
-    check-secureboot["<b>(2)</b> Check Secure Boot status"]
+    check-secureboot["<b>(2)</b> Check Secure Boot status<br/>(if enabled)"]
     enroll-secureboot["Enroll Secure Boot keys"]
     reboot["Reboot"]
     halt["Display error & halt"]
@@ -340,12 +340,14 @@ flowchart TB
 
 ### Description
 
-1. The hosts EFI firmware boots into the Unified Kernel Image (`UKI`), verifying its cryptographic signature if secure boot is active. A service to check that Secure Boot is active runs early in the `UKI`s initial RAM disk (`initrd`).
+1. The hosts EFI firmware boots into the Unified Kernel Image (`UKI`), verifying its cryptographic signature if Secure Boot is active. When `nixosAndroidBuilder.secureBoot.enable = true;`, a service to check the firmware Secure Boot state runs early in the `UKI`s initial RAM disk (`initrd`).
 
-2. `ensure-secure-boot-enrollment.service`, asks EFI firmware about the current Secure Boot status.
+2. If enabled, `ensure-secure-boot-enrollment.service` asks EFI firmware about the current Secure Boot status.
   - If it is **active** and our image is booting succesfully, we trust the firmware here and continue to boot normally.
   - If it is in **setup** mode, we enroll certificates stored on our ESP. Setting the platform key disables setup mode automatically and reboot the machine right after.
   - If it is **disabled** or in any unknown mode, we halt the machine but don't power it off to keep the error message readable.
+
+   If `nixosAndroidBuilder.secureBoot.enable = false;`, this service is not enabled and the system continues booting without Secure Boot enforcement.
 3. Before encrypting the disks, we run `generate-disk-key.service`. A simple script that reads 64 bytes from `/dev/urandom` without ever storing it on disk. All state is encrypted with
    that key, so that if the host shuts down for whatever reason - including sudden power loss - the encrypted data
    ends up unusable.
@@ -409,5 +411,3 @@ flowchart TB
 **TPM** – Trusted Platform Module. A dedicated security chip that provides hardware-based cryptographic functions and key storage.
 
 **UKI** – Unified Kernel Image. A single EFI executable containing the Linux kernel, initrd, and boot parameters, simplifying Secure Boot signing.
-
-

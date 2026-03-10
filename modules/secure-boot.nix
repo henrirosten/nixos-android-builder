@@ -5,6 +5,8 @@
   ...
 }:
 let
+  cfg = config.nixosAndroidBuilder.secureBoot;
+
   enroll-secure-boot = pkgs.writeShellScriptBin "enroll-secure-boot" ''
     set -xeu
     # Allow modification of efivars
@@ -47,60 +49,65 @@ let
 
 in
 {
-  environment.systemPackages = [
-    pkgs.efitools
-    pkgs.tpm2-tools
-    enroll-secure-boot
-  ];
+  options.nixosAndroidBuilder.secureBoot.enable = lib.mkEnableOption ''
+    requiring secure boot during boot and auto-enrolling keys from /boot/KEYS in initrd
+  '';
 
-  boot.initrd.supportedFilesystems.vfat = true;
-  boot.initrd.systemd = {
-    initrdBin = [
-      pkgs.gawk
+  config = lib.mkIf cfg.enable {
+    environment.systemPackages = [
       pkgs.efitools
-    ];
-
-    storePaths = [
+      pkgs.tpm2-tools
       enroll-secure-boot
-      ensureSecureBootEnrollment
     ];
 
-    mounts =
-      let
-        esp = config.image.repart.partitions."00-esp".repartConfig;
-      in
-      [
-        {
-          where = "/boot";
-          what = "/dev/disk/by-partlabel/${esp.Label}";
-          type = esp.Format;
-          unitConfig = {
-            DefaultDependencies = false;
-          };
-          requiredBy = [ "initrd-fs.target" ];
-          before = [ "initrd-fs.target" ];
-        }
+    boot.initrd.systemd = {
+      initrdBin = [
+        pkgs.gawk
+        pkgs.efitools
       ];
 
-    services = {
-      ensure-secure-boot-enrollment = {
-        description = "Ensure secure boot is active. If setup mode, enroll. if disabled, show error";
-        wantedBy = [ "initrd.target" ];
-        before = [
-          "systemd-repart.service"
+      storePaths = [
+        enroll-secure-boot
+        ensureSecureBootEnrollment
+      ];
+
+      mounts =
+        let
+          esp = config.image.repart.partitions."00-esp".repartConfig;
+        in
+        [
+          {
+            where = "/boot";
+            what = "/dev/disk/by-partlabel/${esp.Label}";
+            type = esp.Format;
+            unitConfig = {
+              DefaultDependencies = false;
+            };
+            requiredBy = [ "initrd-fs.target" ];
+            before = [ "initrd-fs.target" ];
+          }
         ];
-        unitConfig = {
-          AssertPathExists = "/boot/KEYS";
-          RequiresMountsFor = [
-            "/boot"
+
+      services = {
+        ensure-secure-boot-enrollment = {
+          description = "Ensure secure boot is active. If setup mode, enroll. if disabled, show error";
+          wantedBy = [ "initrd.target" ];
+          before = [
+            "systemd-repart.service"
           ];
-          DefaultDependencies = false;
-          OnFailure = "emergency.target";
-        };
-        serviceConfig = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-          ExecStart = ensureSecureBootEnrollment;
+          unitConfig = {
+            AssertPathExists = "/boot/KEYS";
+            RequiresMountsFor = [
+              "/boot"
+            ];
+            DefaultDependencies = false;
+            OnFailure = "emergency.target";
+          };
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            ExecStart = ensureSecureBootEnrollment;
+          };
         };
       };
     };
