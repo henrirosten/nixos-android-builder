@@ -79,6 +79,7 @@ in
           options = [ "bind" ];
           fsType = "none";
           depends = [ "/nix/store" ];
+          neededForBoot = true;
         };
       in
       {

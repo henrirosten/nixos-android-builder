@@ -58,7 +58,7 @@
           fsType = "none";
           options = [ "bind" ];
           depends = [ "/bin" ];
-          neededForBoot = false;
+          neededForBoot = true;
         };
         "/nix/store" = {
           overlay = {

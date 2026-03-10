@@ -40,6 +40,8 @@ in
     assert nixosSecureBootDisabled.config.boot.initrd.supportedFilesystems.vfat;
     assert !nixosSecureBootDisabled.config.virtualisation.useSecureBoot;
     assert !(nixosSecureBootDisabled.config.system.build ? secureBootKeysForTests);
+    assert nixosSecureBootDisabled.config.fileSystems."/bin".neededForBoot;
+    assert nixosSecureBootDisabled.config.fileSystems."/usr/bin".neededForBoot;
     assert nixosSecureBootDisabled.config.fileSystems."/usr/bin".fsType == "none";
     assert nixosSecureBootDisabled.config.fileSystems."/usr/bin".depends == [ "/bin" ];
     pkgs.runCommand "secure-boot-disabled-config-check" { } ''
