@@ -25,9 +25,26 @@ let
       )
     ];
   };
+  nixosSecureBootDisabled = nixos.extendModules {
+    modules = [
+      {
+        config.nixosAndroidBuilder.secureBoot.enable = lib.mkForce false;
+      }
+    ];
+  };
   payload = "${nixosWithBackdoor.config.system.build.finalImage}/${nixosWithBackdoor.config.image.filePath}";
 in
 {
+  secureBootDisabledConfig =
+    assert !nixosSecureBootDisabled.config.nixosAndroidBuilder.secureBoot.enable;
+    assert nixosSecureBootDisabled.config.boot.initrd.supportedFilesystems.vfat;
+    assert !nixosSecureBootDisabled.config.virtualisation.useSecureBoot;
+    assert !(nixosSecureBootDisabled.config.system.build ? secureBootKeysForTests);
+    assert nixosSecureBootDisabled.config.fileSystems."/usr/bin".fsType == "none";
+    assert nixosSecureBootDisabled.config.fileSystems."/usr/bin".depends == [ "/bin" ];
+    pkgs.runCommand "secure-boot-disabled-config-check" { } ''
+      touch $out
+    '';
   integration = pkgs.testers.runNixOSTest {
     imports = [
       ./integration.nix

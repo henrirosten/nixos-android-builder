@@ -55,10 +55,9 @@
           # We bind the whole directory because it has no extra cost and
           # we don't know what tools inside the fhsenv might expect /usr/bin paths.
           device = "/bin";
-          options = [
-            "bind"
-            "x-systemd.requires=bin.mount"
-          ];
+          fsType = "none";
+          options = [ "bind" ];
+          depends = [ "/bin" ];
           neededForBoot = false;
         };
         "/nix/store" = {
