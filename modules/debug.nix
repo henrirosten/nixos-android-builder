@@ -30,6 +30,9 @@
       initialHashedPassword = "";
     };
 
+    # Auto-login the default user on the console.
+    services.getty.autologinUser = "user";
+
     # Allow password-less sudo for wheel users
     security.sudo.wheelNeedsPassword = false;
 

@@ -198,7 +198,8 @@ The `debug.nix` module, activated by `nixosAndroidBuilder.debug`, adds convenien
 - Grants unauthenticated access to the emergency shell (both in initrd and the main system).
 - Adds extra packages: `vim`, `htop`, `tmux`, and `git`.
 - Enables `nix` with flake support inside the running system.
-- Sets an empty password for the `user` account and enables auto-login.
+- Sets an empty password for the `user` account and enables
+  console auto-login.
 - Enables password-less `sudo` for `wheel` group members.
 - Adds verbose boot logging and a debug shell on tty3.
 
