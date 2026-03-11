@@ -26,6 +26,8 @@ in
   };
 
   config = {
+    boot.initrd.systemd.services.disk-installer.environment.INSTALLER_COMPLETION_ACTION = "poweroff";
+
     boot.initrd.systemd.initrdBin = [
       # machine.get_tty_text requries awk
       pkgs.gawk
@@ -57,23 +59,23 @@ in
     system.build.prepareInstallerDisk = hostPkgs.writeShellApplication {
       name = "prepare-installer-disk";
       text = ''
-          disk_image="''${NIX_PREPARE_DISK_IMAGE:-${cfg.diskImage}}"
+        disk_image="''${NIX_PREPARE_DISK_IMAGE:-${cfg.diskImage}}"
 
-          if [ ! -e "$disk_image" ]; then
-            echo >&2 "Copying ${config.system.build.image}/${config.image.fileName} to $disk_image"
-            ${cfg.qemu.package}/bin/qemu-img convert \
-              -f raw -O raw \
-              "${config.system.build.image}/${config.image.fileName}" \
-              "$disk_image"
+        if [ ! -e "$disk_image" ]; then
+          echo >&2 "Copying ${config.system.build.image}/${config.image.fileName} to $disk_image"
+          ${cfg.qemu.package}/bin/qemu-img convert \
+            -f raw -O raw \
+            "${config.system.build.image}/${config.image.fileName}" \
+            "$disk_image"
 
-            echo >&2 "Preparing $disk_image"
-            ${lib.getExe disk-installer.configure} set-target --target "${config.diskInstaller.vmInstallerTarget}" --device "$disk_image"
-            ${lib.optionalString (config.diskInstaller.vmStorageTarget != "select") ''
-              ${lib.getExe disk-installer.configure} set-storage --target "${config.diskInstaller.vmStorageTarget}" --device "$disk_image"
-            ''}
-          else
-            echo "$disk_image already exists, skipping creation"
-          fi
+          echo >&2 "Preparing $disk_image"
+          ${lib.getExe disk-installer.configure} set-target --target "${config.diskInstaller.vmInstallerTarget}" --device "$disk_image"
+          ${lib.optionalString (config.diskInstaller.vmStorageTarget != "select") ''
+            ${lib.getExe disk-installer.configure} set-storage --target "${config.diskInstaller.vmStorageTarget}" --device "$disk_image"
+          ''}
+        else
+          echo "$disk_image already exists, skipping creation"
+        fi
       '';
     };
 
@@ -86,6 +88,8 @@ in
       text = ''
         cleanup_disk=1
         disk_image="''${NIX_DISK_IMAGE:-./${lib.removeSuffix ".raw" config.image.fileName}.qcow2}"
+        vm_state_dir="''${NIX_VM_STATE_DIR:-./.installer-vm-state}"
+        installed_disk=""
         efi_vars="''${NIX_EFI_VARS:-./${config.system.name}-efi-vars.fd}"
         swtpm_dir="''${NIX_SWTPM_DIR:-./${config.system.name}-swtpm}"
         console_log="''${RUN_VM_CONSOLE_LOG:-./installer-vm.console.log}"
@@ -107,6 +111,22 @@ in
               disk_image="$2"
               shift 2
               ;;
+            --vm-state-dir)
+              if [ "$#" -lt 2 ]; then
+                echo "error: --vm-state-dir requires a path argument" >&2
+                exit 2
+              fi
+              vm_state_dir="$2"
+              shift 2
+              ;;
+            --installed-disk)
+              if [ "$#" -lt 2 ]; then
+                echo "error: --installed-disk requires a path argument" >&2
+                exit 2
+              fi
+              installed_disk="$2"
+              shift 2
+              ;;
             --help|-h)
               cat <<EOF
         Usage: nix run .#installer-vm -- [OPTIONS] [-- VM_ARGS...]
@@ -114,10 +134,19 @@ in
         Options:
           --keep-disk        Keep disk image after VM exits
           --disk-image PATH  Disk image path (default: ./${lib.removeSuffix ".raw" config.image.fileName}.qcow2)
+          --vm-state-dir PATH
+                            Directory used for qemu-vm state (default: ./.installer-vm-state)
+          --installed-disk PATH
+                            Disk to boot after installation
+                            (default: ./.installer-vm-state/empty0.qcow2)
           --help, -h         Show this help text
 
         Environment:
           NIX_DISK_IMAGE     Override disk image path (default: ./${lib.removeSuffix ".raw" config.image.fileName}.qcow2)
+          NIX_VM_STATE_DIR   Override qemu-vm state directory (default: ./.installer-vm-state)
+          NIX_INSTALLER_BOOT_DISK
+                            Override installed target disk path
+                            (default: ./.installer-vm-state/empty0.qcow2)
         EOF
               exit 0
               ;;
@@ -132,6 +161,11 @@ in
         done
 
         disk_image="$(readlink -m "$disk_image")"
+        vm_state_dir="$(readlink -m "$vm_state_dir")"
+        if [ -z "$installed_disk" ]; then
+          installed_disk="$vm_state_dir/empty0.qcow2"
+        fi
+        installed_disk="$(readlink -m "$installed_disk")"
         efi_vars="$(readlink -m "$efi_vars")"
         swtpm_dir="$(readlink -m "$swtpm_dir")"
         console_log="$(readlink -m "$console_log")"
@@ -152,6 +186,12 @@ in
           if [ "$cleanup_disk" -eq 1 ] && [ -f "$disk_image" ]; then
             rm -f -- "$disk_image"
           fi
+          if [ "$cleanup_disk" -eq 1 ] && [ -d "$vm_state_dir" ]; then
+            rm -rf -- "$vm_state_dir"
+          fi
+          if [ "$cleanup_disk" -eq 1 ] && [ -f "$installed_disk" ] && [ "$installed_disk" != "$disk_image" ]; then
+            rm -f -- "$installed_disk"
+          fi
           if [ "$cleanup_disk" -eq 1 ] && [ -f "$efi_vars" ]; then
             rm -f -- "$efi_vars"
           fi
@@ -166,6 +206,27 @@ in
         export NIX_DISK_IMAGE="$disk_image"
         export NIX_EFI_VARS="$efi_vars"
         export NIX_SWTPM_DIR="$swtpm_dir"
+        export TMPDIR="$vm_state_dir"
+        export USE_TMPDIR=1
+
+        mkdir -p "$vm_state_dir"
+
+        run_vm_phase() {
+          raw_console_log="$(mktemp -t ${config.system.name}-console.XXXXXX.log)"
+          (
+            tail -c +1 -f "$raw_console_log" | stdbuf -oL ansifilter >> "$console_log"
+          ) &
+          console_filter_pid="$!"
+
+          set -- -serial "file:$raw_console_log" "$@"
+          ${lib.getExe config.system.build.vm} "$@"
+
+          kill "$console_filter_pid" 2>/dev/null || true
+          wait "$console_filter_pid" 2>/dev/null || true
+          console_filter_pid=""
+          rm -f -- "$raw_console_log"
+          raw_console_log=""
+        }
 
         if [ ! -e "$disk_image" ]; then
           tmp_raw="$(mktemp -t ${config.system.name}-installer.XXXXXX.raw)"
@@ -182,17 +243,23 @@ in
         fi
 
         mkdir -p "$(dirname "$console_log")"
-        raw_console_log="$(mktemp -t ${config.system.name}-console.XXXXXX.log)"
         : > "$console_log"
 
-        (
-          tail -c +1 -f "$raw_console_log" | stdbuf -oL ansifilter >> "$console_log"
-        ) &
-        console_filter_pid="$!"
+        echo "Starting installer VM from $disk_image" >&2
+        run_vm_phase "$@"
 
-        set -- -serial "file:$raw_console_log" "$@"
+        if [ ! -f "$installed_disk" ]; then
+          echo "warning: installed target disk $installed_disk was not created; not starting second boot" >&2
+          exit 0
+        fi
 
-        ${lib.getExe config.system.build.vm} "$@"
+        if [ "$installed_disk" != "$disk_image" ]; then
+          rm -f -- "$disk_image"
+          mv -- "$installed_disk" "$disk_image"
+        fi
+
+        echo "Starting installed system from $disk_image" >&2
+        run_vm_phase "$@"
       '';
     };
   };

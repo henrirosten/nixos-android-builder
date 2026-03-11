@@ -4,6 +4,7 @@ android-builder-efi-vars.fd
 android-builder-swtpm/
 *-efi-vars.fd
 *-swtpm/
+.installer-vm-state/
 *.log
 *.raw
 .direnv/

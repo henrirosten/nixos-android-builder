@@ -32,7 +32,7 @@
       machine.start()
 
       machine.wait_until_tty_matches(
-        "2", "Please remove the installation media"
+        "2", "Press enter to power off and boot from the installed disk"
       )
       machine.send_key("\n")
 

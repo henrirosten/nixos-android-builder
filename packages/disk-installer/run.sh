@@ -138,9 +138,24 @@ sync
 echo 1 > /run/installer_done  # marker file for automated tests
 
 msg_done="Installation to $install_target done.\n\nPlease remove the installation media before pressing enter to reboot."
+completion_action="${INSTALLER_COMPLETION_ACTION:-reboot}"
+
+case "$completion_action" in
+    poweroff)
+        msg_done="Installation to $install_target done.\n\nPress enter to power off and boot from the installed disk."
+        ;;
+    reboot)
+        msg_done="Installation to $install_target done.\n\nPlease remove the installation media before pressing enter to reboot."
+        ;;
+    *)
+        record_fatal_error "ERROR: unknown installer completion action \"$completion_action\""
+        exit 1
+        ;;
+esac
+
 echo "$msg_done" >&4
 dialog --colors --ok-button " Reboot " --msgbox "$msg_done" 10 60
 
 chvt 1
 
-systemctl reboot --no-block --force
+systemctl "$completion_action" --no-block --force
