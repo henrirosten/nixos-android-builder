@@ -1,5 +1,28 @@
 set -euo pipefail
 
+record_fatal_error() {
+    local msg="$1"
+    if [ ! -s /run/fatal-error ]; then
+        printf '%s\n' "$msg" > /run/fatal-error || true
+    fi
+    if [ -e /proc/self/fd/5 ]; then
+        printf '%s\n' "$msg" >&5 || true
+    else
+        printf '%s\n' "$msg" >&2 || true
+    fi
+}
+
+handle_exit() {
+    local status=$?
+    trap - EXIT
+    if [ "$status" -ne 0 ] && [ ! -s /run/fatal-error ]; then
+        record_fatal_error "Disk installation failed. Please consult logs (ctrl+alt+f1)."
+    fi
+    exit "$status"
+}
+
+trap handle_exit EXIT
+
 ddrescue2gauge() {
     local total="$1"
     local pct="0"
@@ -40,7 +63,7 @@ ddrescue2gauge() {
 
 select_disk() {
     if ! disk_json="$(lsblk --json --nodeps --output NAME,SIZE,TYPE,MODEL 2>/dev/null)"; then
-        echo "Error: Failed to retrieve disk information" | tee /run/fatal-error >&5
+        record_fatal_error "Error: Failed to retrieve disk information"
         exit 1
     fi
 
@@ -55,7 +78,7 @@ select_disk() {
     done < <(echo "$disk_json" | jq -r '.blockdevices[] | select(.type == "disk") | "\(.name)|\(.size)|\(.model // "Unknown")"')
 
     if [ ${#menu_options[@]} -eq 0 ]; then
-        echo "Error: No disks found" | tee /run/fatal-error >&5
+        record_fatal_error "Error: No disks found"
         exit 1
     fi
 
@@ -83,14 +106,14 @@ exec 5> >(systemd-cat -p err)
 echo -e "\nDisk Installer\n" >&4
 
 if [ ! -t 1 ]; then
-    echo "stdout is NOT a tty" | tee /run/fatal-error >&5
+    record_fatal_error "stdout is NOT a tty"
     exit 1
 fi
 
 
 echo "Using $INSTALL_SOURCE as installation source" >&4
 if [ ! -b "$INSTALL_SOURCE" ]; then
-  echo "ERROR: installation source \"$INSTALL_SOURCE\" is not a block device." | tee /run/fatal-error >&5
+  record_fatal_error "ERROR: installation source \"$INSTALL_SOURCE\" is not a block device."
   exit 1
 fi
 
@@ -102,14 +125,14 @@ if [ "$install_target" = "select" ] || [ -z "$install_target" ]; then
 fi
 
 if [ ! -b "$install_target" ]; then
-  echo "ERROR: installation target \"$install_target\" is not a block device." | tee /run/fatal-error >&5
+  record_fatal_error "ERROR: installation target \"$install_target\" is not a block device."
   exit 1
 fi
 
 intro_msg="About to install from $INSTALL_SOURCE to $install_target"
 echo  "$intro_msg" >&4
 if ! dialog --colors --pause "$intro_msg" 10 40 3; then
-    echo "User cancelled installation." | tee /run/fatal-error >&5
+    record_fatal_error "User cancelled installation."
     exit 1
 fi
 
@@ -119,7 +142,7 @@ INSTALL_SOURCE_size=$(lsblk -bno SIZE -J "$INSTALL_SOURCE" | jq -r '.blockdevice
 install_target_size=$(lsblk -bno SIZE -J "$install_target" | jq -r '.blockdevices[0].size')
 
 if [ "$install_target_size" -lt "$INSTALL_SOURCE_size" ]; then
-    echo "Error: $install_target ($install_target_size) is smaller than $INSTALL_SOURCE ($INSTALL_SOURCE_size)" >&5
+    record_fatal_error "Error: $install_target ($install_target_size) is smaller than $INSTALL_SOURCE ($INSTALL_SOURCE_size)"
     exit 1
 else
     echo "OK: $install_target is at least as large as $INSTALL_SOURCE" >&4

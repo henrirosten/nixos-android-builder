@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+record_fatal_error() {
+    local msg="$1"
+    if [ ! -s /run/fatal-error ]; then
+        printf '%s\n' "$msg" > /run/fatal-error || true
+    fi
+    printf '%s\n' "$msg" >&2 || true
+}
+
+trap 'status=$?; trap - EXIT; if [ "$status" -ne 0 ] && [ ! -s /run/fatal-error ]; then if [ -n "${step:-}" ]; then record_fatal_error "Unattended step failed: ${step#root:}. Please consult logs (ctrl+alt+f1)."; else record_fatal_error "Unattended mode failed. Please consult logs (ctrl+alt+f1)."; fi; fi; exit "$status"' EXIT
+
 IFS=',' read -ra steps <<< "${STEPS}"
 total=${#steps[@]}
 chvt 2

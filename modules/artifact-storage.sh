@@ -1,8 +1,22 @@
 set -euo pipefail
 
+record_fatal_error() {
+    local msg="$1"
+    if [ ! -s /run/fatal-error ]; then
+        printf '%s\n' "$msg" > /run/fatal-error || true
+    fi
+    if [ -e /proc/self/fd/5 ]; then
+        printf '%s\n' "$msg" >&5 || true
+    else
+        printf '%s\n' "$msg" >&2 || true
+    fi
+}
+
+trap 'status=$?; trap - EXIT; if [ "$status" -ne 0 ] && [ ! -s /run/fatal-error ]; then record_fatal_error "Artifact storage setup failed. Please consult logs (ctrl+alt+f1)."; fi; exit "$status"' EXIT
+
 select_disk() {
     if ! disk_json="$(lsblk --json --nodeps --output NAME,SIZE,TYPE,MODEL 2>/dev/null)"; then
-        echo "Error: Failed to retrieve disk information" | tee /run/fatal-error >&5
+        record_fatal_error "Error: Failed to retrieve disk information"
         exit 1
     fi
 
@@ -19,7 +33,7 @@ select_disk() {
     done < <(echo "$disk_json" | jq -r '.blockdevices[] | select(.type == "disk") | "\(.name)|\(.size)|\(.model // "Unknown")"')
 
     if [ ${#menu_options[@]} -eq 0 ]; then
-        echo "Error: No disks found" | tee /run/fatal-error >&5
+        record_fatal_error "Error: No disks found"
         exit 1
     fi
 

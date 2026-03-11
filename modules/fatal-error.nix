@@ -62,7 +62,7 @@ let
             --colors \
             --ok-button " Shutdown " \
             --title "Error" \
-            --msgbox "$(cat /run/fatal-error || echo "Unknown error, please consult logs (ctrl+alt+f1)")" \
+            --msgbox "$(cat /run/fatal-error 2>/dev/null || echo "Unknown error, please consult logs (ctrl+alt+f1)")" \
             10 60
         chvt 1
         systemctl --no-block poweroff
@@ -73,6 +73,7 @@ in
 {
   boot.initrd.systemd = {
     inherit targets services;
+    contents."/etc/terminfo".source = "${pkgs.ncurses}/share/terminfo";
     extraBin = {
       cat = "${pkgs.coreutils}/bin/cat";
       dialog = "${pkgs.dialog}/bin/dialog";

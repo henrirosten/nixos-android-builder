@@ -25,7 +25,17 @@ let
   '';
 
   ensureSecureBootEnrollment = pkgs.writeShellScript "ensure-secure-boot-enrollment" ''
-    set -eu
+    set -euo pipefail
+
+    record_fatal_error() {
+      local msg="$1"
+      if [ ! -s /run/fatal-error ]; then
+        printf '%s\n' "$msg" > /run/fatal-error || true
+      fi
+      printf '%s\n' "$msg" | systemd-cat -p crit || true
+    }
+
+    trap 'status=$?; trap - EXIT; if [ "$status" -ne 0 ] && [ ! -s /run/fatal-error ]; then record_fatal_error "Secure Boot enrollment check failed. Please consult logs (ctrl+alt+f1)."; fi; exit "$status"' EXIT
 
     sb_status="$(bootctl 2>/dev/null \
     | awk '/Secure Boot:/ {print $3 " " $4}')"
@@ -41,8 +51,7 @@ let
       echo "Secure Boot active" | systemd-cat -p info
     else
       msg_error="Secure Boot is neither active nor in setup mode. Please enable it in firmware settings."
-      echo "$msg_error" | systemd-cat -p crit
-      echo "$msg_error" > /run/fatal-error
+      record_fatal_error "$msg_error"
       exit 1
     fi
   '';
