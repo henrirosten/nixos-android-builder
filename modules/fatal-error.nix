@@ -57,13 +57,40 @@ let
         # if we entered the emergency target too early
         udevadm trigger --action=add
         udevadm settle --timeout=10
-        dialog \
-            --clear \
-            --colors \
-            --ok-button " Shutdown " \
-            --title "Error" \
-            --msgbox "$(cat /run/fatal-error 2>/dev/null || echo "Unknown error, please consult logs (ctrl+alt+f1)")" \
-            10 60
+
+        lines=$(tput lines 2>/dev/null || echo 24)
+        cols=$(tput cols 2>/dev/null || echo 80)
+        box_height=$((lines > 6 ? lines - 4 : lines))
+        box_width=$((cols > 6 ? cols - 4 : cols))
+
+        if [ -s /run/fatal-error ]; then
+          dialog \
+              --clear \
+              --colors \
+              --ok-button " Shutdown " \
+              --title "Error" \
+              --msgbox "$(cat /run/fatal-error 2>/dev/null)" \
+              "$box_height" "$box_width"
+        else
+          diagnostics="$(mktemp)"
+          {
+            echo "fatal-error.service was started without /run/fatal-error."
+            echo
+            echo "Failed units:"
+            systemctl --failed --no-legend --plain 2>/dev/null || true
+            echo
+            echo "Recent error logs:"
+            journalctl -b -p warning..alert -n 40 \
+              --no-pager --output=short-monotonic 2>/dev/null || true
+          } > "$diagnostics"
+          dialog \
+              --clear \
+              --colors \
+              --ok-button " Shutdown " \
+              --title "Error Details" \
+              --textbox "$diagnostics" \
+              "$box_height" "$box_width"
+        fi
         chvt 1
         systemctl --no-block poweroff
       '';
